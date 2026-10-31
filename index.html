@@ -85,6 +85,8 @@
     font-size: 14px; cursor: pointer; font-family: inherit; color: var(--text);
   }
   .chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip.yes { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+  .chip.no { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
   .order {
     display: grid; grid-template-columns: 76px 1fr; gap: 14px; align-items: start;
     background: var(--card); border-radius: 16px; padding: 12px; margin-bottom: 10px;
@@ -192,6 +194,7 @@
       <button class="chip" data-f="geleverd">Geleverd</button>
       <button class="chip" data-f="open">Nog niet klaar</button>
     </div>
+    <div class="hint" style="margin:-6px 0 14px">Tik 1× = <b style="color:var(--red)">nog niet</b>, 2× = <b style="color:var(--green)">wel</b>, 3× = filter uit.</div>
     <div id="orderList"></div>
   </section>
 
@@ -513,22 +516,31 @@ editForm.querySelector("[data-delete]").onclick = async () => {
 document.querySelectorAll(".modal-bg").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.classList.remove("open"); }));
 
 // ---------- Overzicht ----------
-// Aan/uit-filters die samen gelden (bijv. Geprint + Betaald = beide waar)
-const filter = { geprint: false, betaald: false, geleverd: false, open: false };
+// Statusfilters: null = uit, false = rood (nog niet), true = groen (wel). Filters gelden samen.
+const STATUSSEN = { geprint: ["Geprint", "Niet geprint"], betaald: ["Betaald", "Niet betaald"], geleverd: ["Geleverd", "Niet geleverd"] };
+const filter = { geprint: null, betaald: null, geleverd: null, open: false };
 const isKlaar = (o) => o.geprint && o.betaald && o.geleverd;
 
 function renderChips() {
   document.querySelectorAll("#filterChips .chip").forEach((c) => {
     const f = c.dataset.f;
-    c.classList.toggle("active", f === "alle" ? !Object.values(filter).some(Boolean) : filter[f]);
+    if (f === "alle") c.classList.toggle("active", Object.keys(STATUSSEN).every((k) => filter[k] === null) && !filter.open);
+    else if (f === "open") c.classList.toggle("active", filter.open);
+    else {
+      const v = filter[f];
+      c.textContent = v === true ? "✔︎ " + STATUSSEN[f][0] : v === false ? "✗ " + STATUSSEN[f][1] : STATUSSEN[f][0];
+      c.classList.toggle("yes", v === true);
+      c.classList.toggle("no", v === false);
+    }
   });
 }
 
 $("filterChips").onclick = (e) => {
   const b = e.target.closest(".chip"); if (!b) return;
   const f = b.dataset.f;
-  if (f === "alle") for (const k in filter) filter[k] = false;
-  else filter[f] = !filter[f];
+  if (f === "alle") { for (const k in STATUSSEN) filter[k] = null; filter.open = false; }
+  else if (f === "open") filter.open = !filter.open;
+  else filter[f] = filter[f] === null ? false : filter[f] === false ? true : null;
   renderChips();
   renderList();
 };
@@ -539,7 +551,7 @@ function renderList() {
   const q = key($("search").value);
   const list = orders
     .filter((o) => !q || key(o.klant).includes(q) || key(o.product).includes(q))
-    .filter((o) => (!filter.geprint || o.geprint) && (!filter.betaald || o.betaald) && (!filter.geleverd || o.geleverd) && (!filter.open || !isKlaar(o)))
+    .filter((o) => Object.keys(STATUSSEN).every((k) => filter[k] === null || !!o[k] === filter[k]) && (!filter.open || !isKlaar(o)))
     .sort((a, b) => (b.datum || "").localeCompare(a.datum || "") || b.created - a.created);
 
   $("orderList").innerHTML = list.length ? list.map((o) => `
