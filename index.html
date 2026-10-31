@@ -437,16 +437,16 @@ function buildForm(form, isEdit) {
   form.product.oninput = updKosten;
   form.updKosten = updKosten;
 
-  // Bij een bekend product: gram en foto van de vorige keer invullen, prijs blijft een voorstel
+  // Bij een bekend product: gram en foto van de vorige keer invullen (ook als er al iets stond), prijs blijft een voorstel
   form.product.onchange = () => {
-    if (isEdit || form.gram.value) return;
+    if (isEdit) return;
     const eerder = eerdereBestellingen();
     const prev = eerder[0];
     if (prev) {
       form.gram.value = String(prev.gram).replace(".", ",");
       updKosten();
       const metFoto = eerder.find((o) => o.foto);
-      if (!form._photo && metFoto) form.setPhoto(metFoto.foto);
+      if (metFoto) form.setPhoto(metFoto.foto);
       toast(metFoto ? "Gram en foto van vorige keer ingevuld" : "Gram van vorige keer ingevuld");
     }
   };

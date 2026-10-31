@@ -1,4 +1,4 @@
-const CACHE_NAME = "printjes-v7";
+const CACHE_NAME = "printjes-v8";
 const SHELL_FILES = [
   "./",
   "./index.html",
