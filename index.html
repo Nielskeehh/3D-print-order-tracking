@@ -186,11 +186,11 @@
       <input type="search" id="search" placeholder="🔍 Zoek op klant of product">
     </div>
     <div class="chips" id="filterChips">
-      <button class="chip active" data-f="alle">Alles</button>
-      <button class="chip" data-f="teprinten">Nog printen</button>
-      <button class="chip" data-f="nietbetaald">Niet betaald</button>
-      <button class="chip" data-f="nietgeleverd">Niet geleverd</button>
-      <button class="chip" data-f="klaar">Helemaal klaar</button>
+      <button class="chip" data-f="alle">Alles</button>
+      <button class="chip" data-f="geprint">Geprint</button>
+      <button class="chip" data-f="betaald">Betaald</button>
+      <button class="chip" data-f="geleverd">Geleverd</button>
+      <button class="chip" data-f="open">Nog niet klaar</button>
     </div>
     <div id="orderList"></div>
   </section>
@@ -272,6 +272,10 @@
     <input id="setGramPrijs" inputmode="decimal">
     <div class="hint">Standaard € 0,01 per gram. Hiermee worden de kosten en winst berekend.</div>
 
+    <label for="setFactor">Voorstelprijs = inkoop ×</label>
+    <input id="setFactor" inputmode="decimal">
+    <div class="hint">Standaard 5. Bij een nieuwe bestelling staat deze prijs grijs als voorbeeld; de echte prijs typ je zelf in.</div>
+
     <h3 style="margin-top:22px">Back-up</h3>
     <div class="hint" style="margin-bottom:10px">Alles staat alleen op deze iPad. Maak af en toe een back-up (met foto's) en bewaar die in Bestanden of iCloud.</div>
     <div style="display:flex; gap:10px; flex-wrap:wrap">
@@ -318,7 +322,7 @@ const dbPut = (o) => tx("readwrite", (s) => s.put(o));
 const dbDel = (id) => tx("readwrite", (s) => s.delete(id));
 
 let orders = [];
-let settings = { gramPrijs: 0.01 };
+let settings = { gramPrijs: 0.01, factor: 5 };
 try { Object.assign(settings, JSON.parse(localStorage.getItem("printjes-settings") || "{}")); } catch (e) {}
 
 // ---------- Helpers ----------
@@ -374,12 +378,13 @@ function buildForm(form, isEdit) {
     <div class="row2">
       <div>
         <label>Hoeveel gram?</label>
-        <input name="gram" inputmode="decimal" required placeholder="0">
+        <input name="gram" inputmode="decimal" required pattern="[0-9]+([.,][0-9]+)?" title="Vul een getal in" placeholder="0">
         <div class="hint" data-kosten></div>
       </div>
       <div>
         <label>Prijs (€)</label>
-        <input name="prijs" inputmode="decimal" required placeholder="0,00">
+        <input name="prijs" inputmode="decimal" required pattern="[0-9]+([.,][0-9]{1,2})?" title="Vul een bedrag in, bijv. 3,50" placeholder="0,00">
+        <div class="hint" data-vorige></div>
       </div>
     </div>
     <label>Datum</label>
@@ -400,6 +405,8 @@ function buildForm(form, isEdit) {
   const fileIn = form.querySelector("[data-photoinput]");
   const rm = form.querySelector("[data-removephoto]");
   const kostenHint = form.querySelector("[data-kosten]");
+  const vorigeHint = form.querySelector("[data-vorige]");
+  const eerdereBestellingen = () => orders.filter((o) => key(o.product) === key(form.product.value)).sort((a, b) => b.created - a.created);
 
   form.setPhoto = (dataUrl) => {
     form._photo = dataUrl;
@@ -414,22 +421,30 @@ function buildForm(form, isEdit) {
   };
   rm.onclick = () => form.setPhoto(null);
 
+  // Voorstelprijs (inkoop × factor) alleen als grijze placeholder, Lynn typt de echte prijs zelf
   const updKosten = () => {
     const g = num(form.gram.value);
     kostenHint.textContent = g ? `Inkoop: ${eur(g * settings.gramPrijs)}` : "";
+    form.prijs.placeholder = g ? (g * settings.gramPrijs * settings.factor).toFixed(2).replace(".", ",") : "0,00";
+    // Ter info: wat er de vorige keer voor dit product gevraagd is (prijsafspraak kan per klant verschillen)
+    const prev = isEdit ? null : eerdereBestellingen()[0];
+    vorigeHint.textContent = prev ? `Vorige keer: ${eur(prev.prijs)} (${prev.klant})` : "";
   };
   form.gram.oninput = updKosten;
+  form.product.oninput = updKosten;
   form.updKosten = updKosten;
 
-  // Bij een bekend product: gram en prijs van de vorige keer alvast invullen
+  // Bij een bekend product: gram en foto van de vorige keer invullen, prijs blijft een voorstel
   form.product.onchange = () => {
-    if (isEdit || form.gram.value || form.prijs.value) return;
-    const prev = orders.filter((o) => key(o.product) === key(form.product.value)).sort((a, b) => b.created - a.created)[0];
+    if (isEdit || form.gram.value) return;
+    const eerder = eerdereBestellingen();
+    const prev = eerder[0];
     if (prev) {
       form.gram.value = String(prev.gram).replace(".", ",");
-      form.prijs.value = prev.prijs.toFixed(2).replace(".", ",");
       updKosten();
-      toast("Gram en prijs van vorige keer ingevuld");
+      const metFoto = eerder.find((o) => o.foto);
+      if (!form._photo && metFoto) form.setPhoto(metFoto.foto);
+      toast(metFoto ? "Gram en foto van vorige keer ingevuld" : "Gram van vorige keer ingevuld");
     }
   };
 }
@@ -498,26 +513,33 @@ editForm.querySelector("[data-delete]").onclick = async () => {
 document.querySelectorAll(".modal-bg").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m) m.classList.remove("open"); }));
 
 // ---------- Overzicht ----------
-let filter = "alle";
+// Aan/uit-filters die samen gelden (bijv. Geprint + Betaald = beide waar)
+const filter = { geprint: false, betaald: false, geleverd: false, open: false };
+const isKlaar = (o) => o.geprint && o.betaald && o.geleverd;
+
+function renderChips() {
+  document.querySelectorAll("#filterChips .chip").forEach((c) => {
+    const f = c.dataset.f;
+    c.classList.toggle("active", f === "alle" ? !Object.values(filter).some(Boolean) : filter[f]);
+  });
+}
+
 $("filterChips").onclick = (e) => {
   const b = e.target.closest(".chip"); if (!b) return;
-  filter = b.dataset.f;
-  document.querySelectorAll("#filterChips .chip").forEach((c) => c.classList.toggle("active", c === b));
+  const f = b.dataset.f;
+  if (f === "alle") for (const k in filter) filter[k] = false;
+  else filter[f] = !filter[f];
+  renderChips();
   renderList();
 };
+renderChips();
 $("search").oninput = () => renderList();
 
 function renderList() {
   const q = key($("search").value);
   const list = orders
     .filter((o) => !q || key(o.klant).includes(q) || key(o.product).includes(q))
-    .filter((o) => ({
-      alle: true,
-      teprinten: !o.geprint,
-      nietbetaald: !o.betaald,
-      nietgeleverd: !o.geleverd,
-      klaar: o.geprint && o.betaald && o.geleverd,
-    }[filter]))
+    .filter((o) => (!filter.geprint || o.geprint) && (!filter.betaald || o.betaald) && (!filter.geleverd || o.geleverd) && (!filter.open || !isKlaar(o)))
     .sort((a, b) => (b.datum || "").localeCompare(a.datum || "") || b.created - a.created);
 
   $("orderList").innerHTML = list.length ? list.map((o) => `
@@ -685,11 +707,14 @@ document.querySelector("nav").onclick = (e) => {
 // ---------- Instellingen & back-up ----------
 $("btnSettings").onclick = () => {
   $("setGramPrijs").value = String(settings.gramPrijs).replace(".", ",");
+  $("setFactor").value = String(settings.factor).replace(".", ",");
   $("settingsModal").classList.add("open");
 };
 $("btnSettingsSave").onclick = () => {
   const v = num($("setGramPrijs").value);
   if (v > 0) settings.gramPrijs = v;
+  const fac = num($("setFactor").value);
+  if (fac > 0) settings.factor = fac;
   localStorage.setItem("printjes-settings", JSON.stringify(settings));
   $("settingsModal").classList.remove("open");
   orderForm.updKosten();
